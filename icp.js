@@ -15,32 +15,14 @@ const STATE = {
   bigContent: null,    // 편집 중인 메모의 원래 큰 본문, textarea 에 풀지 않고 그대로 유지
 };
 
-const NOTE_LIMIT = 8000000;          // 백엔드 NOTE_MAX 와 같게
 const NOTE_EDIT_MAX = 200000;        // 이보다 큰 메모는 편집칸에 풀지 않는다 (렌더 멈춤 방지)
 
 const ALL_TAB = "__all__";
 const MEMBERS = ["Jett", "Minhyun"];   // 고정 사용자, 탭과 로그인 선택지
 function myName() { return localStorage.getItem("icp_name") || ""; }
 
-// ── 보안 가드 ─────────────────────────────────
-// 이 페이지는 "개인 PC에서 만든 코드를 회사 PC로 가져가는" 단방향 전달함이다.
-// 회사 시스템에서 내보낸 정보(웹훅 URL, 토큰, 내부 IP, 사내 계정, 비밀번호 값)는 개인 서비스에
-// 저장되면 안 되므로 저장 전에 거부한다. 백엔드(main.py _SENSITIVE_PATTERNS)에도 같은 검사가 있다.
+// 업로드 용량 제한·민감정보 가드는 2026-09-02 제거 — 회사 접근 차단으로 개인 기기 간 전용이 됨
 const RETENTION_DAYS = 7;   // 백엔드 SNIPPET_RETENTION_DAYS 와 같게, 지나면 자동 삭제
-const SENSITIVE_PATTERNS = [
-  [/webhook\.office\.com|logic\.azure\.com|powerautomate\.com|hooks\.slack\.com|discord(?:app)?\.com\/api\/webhooks/i, "웹훅 URL"],
-  [/eyJ[A-Za-z0-9_-]{20,}\.eyJ[A-Za-z0-9_-]{20,}/, "인증 토큰(JWT)"],
-  [/\b(?:10\.\d{1,3}\.\d{1,3}\.\d{1,3}|192\.168\.\d{1,3}\.\d{1,3}|172\.(?:1[6-9]|2\d|3[01])\.\d{1,3}\.\d{1,3})\b/, "내부 IP 주소"],
-  [/[\w.+-]+@coupang\.com/i, "사내 이메일"],
-  [/\b(?:password|passwd|pwd|secret|api[_-]?key|access[_-]?token)\b\s*[:=]\s*["'][^"']{4,}["']/i, "비밀번호/키 값"],
-];
-function findSensitive(...parts) {
-  for (const p of parts) {
-    if (!p) continue;
-    for (const [rx, label] of SENSITIVE_PATTERNS) if (rx.test(p)) return label;
-  }
-  return "";
-}
 
 const TB4_PARTS = [
   { key: "html", label: "HTML" },
@@ -485,16 +467,8 @@ async function saveSnippet(e) {
   };
   // 첨부 파일명으로 제목을 채워준다, 받는 쪽 ⬇ 저장 파일명이 된다
   if (!body.title && STATE.pendingFile) { body.title = STATE.pendingFile.name; $("snipTitle").value = body.title; }
-  if (body.content.length > NOTE_LIMIT) {
-    showToast(`내용이 너무 큽니다 (${Math.round(body.content.length / 1048576 * 10) / 10}MB / 한도 8MB)`, true); return;
-  }
   const hasContent = body.content.trim() || body.html.trim() || body.css.trim() || body.js.trim() || body.settings.trim();
   if (!hasContent) { showToast(STATE.kind === "note" ? "내용을 입력해주세요" : "코드를 입력해주세요", true); return; }
-  const hit = findSensitive(body.title, body.content, body.html, body.css, body.js, body.settings);
-  if (hit) {
-    showToast(`${hit}이(가) 들어 있어 저장할 수 없어요. 회사 내부 정보는 올리지 마세요 (해당 값은 회사 PC에서 직접 채우세요)`, true);
-    return;
-  }
   try {
     if (STATE.editingId) {
       const updated = await api("PATCH", `/api/icp/snippets/${STATE.editingId}`, body);
@@ -543,7 +517,6 @@ document.addEventListener("DOMContentLoaded", () => {
   $("snipFileInput").addEventListener("change", function () {
     const f = this.files[0]; this.value = "";
     if (!f) return;
-    if (f.size > NOTE_LIMIT) { showToast(`파일이 너무 큽니다 (${Math.round(f.size / 1048576 * 10) / 10}MB / 한도 8MB)`, true); return; }
     const rd = new FileReader();
     rd.onload = () => { STATE.bigContent = null; setPendingFile({ name: f.name, text: String(rd.result) }); };
     rd.onerror = () => showToast("파일을 읽지 못했어요", true);
