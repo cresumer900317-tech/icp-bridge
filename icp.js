@@ -105,6 +105,53 @@ async function api(method, path, body) {
   return data;
 }
 
+// 원본 파일(엑셀 등) 바이너리 업로드 — api()는 JSON 전용이라 여기선 FormData 로 직접 fetch
+async function uploadFile(file) {
+  const t = token();
+  if (!t) { showLogin(); return; }
+  const fd = new FormData();
+  fd.append("file", file);
+  fd.append("title", file.name || "");
+  showToast(`${file.name} 올리는 중…`);
+  try {
+    const res = await fetch(`${API_BASE}/api/icp/files`, {
+      method: "POST", headers: { "Authorization": `Bearer ${t}` }, body: fd,
+    });
+    if (res.status === 401 || res.status === 403) { sessionStorage.removeItem("icp_token"); showLogin(); return; }
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.detail || "업로드에 실패했어요");
+    if (data && data.id) STATE.snippets.unshift(data);
+    renderAll();
+    showToast(`${file.name} 올렸어요 📁`);
+  } catch (err) {
+    showToast(err.message, true);
+  }
+}
+
+// 원본 파일 다운로드 — 비공개 버킷이라 인증 붙여 blob 으로 받아 저장
+async function downloadFile(s) {
+  const t = token();
+  if (!t) { showLogin(); return; }
+  const m = fileMeta(s);
+  showToast(`${m.name || "파일"} 받는 중…`);
+  try {
+    const res = await fetch(`${API_BASE}/api/icp/files/${s.id}/download`, {
+      headers: { "Authorization": `Bearer ${t}` },
+    });
+    if (res.status === 401 || res.status === 403) { sessionStorage.removeItem("icp_token"); showLogin(); return; }
+    if (!res.ok) throw new Error("다운로드에 실패했어요");
+    const blob = await res.blob();
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = m.name || (s.title || "file");
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(a.href), 1500);
+    showToast(`${a.download} 저장됨 ⬇`);
+  } catch (err) {
+    showToast(err.message, true);
+  }
+}
+
 let pickedMember = "";
 function pickMember(name) {
   pickedMember = name;
@@ -223,7 +270,20 @@ function renderAll() {
 function kindLabel(kind) {
   if (kind === "tb4") return "TB 4파트";
   if (kind === "note") return "메모";
+  if (kind === "file") return "파일";
   return "단일";
+}
+
+// kind=file 스니펫의 content 는 메타데이터 JSON {path,name,size,mime}
+function fileMeta(s) {
+  try { const m = JSON.parse(s.content || "{}"); return (m && typeof m === "object") ? m : {}; }
+  catch (_) { return {}; }
+}
+function humanSize(n) {
+  n = Number(n) || 0;
+  if (n >= 1048576) return (n / 1048576).toFixed(1) + "MB";
+  if (n >= 1024) return Math.round(n / 1024) + "KB";
+  return n + "B";
 }
 
 function preview(text) {
@@ -251,6 +311,9 @@ function cardHtml(s) {
           <pre class="snip-pre">${preview(val)}</pre>
         </div>`;
       }).join("") || `<div class="snip-empty-body">내용 없음</div>`;
+    } else if (s.kind === "file") {
+      const m = fileMeta(s);
+      body = `<div class="snip-part"><div class="snip-note">📁 ${escapeHtml(m.name || "파일")} · ${humanSize(m.size)}<br><small>⬇ 버튼으로 원본을 그대로 내려받습니다.</small></div></div>`;
     } else if (s.kind === "note") {
       // 메모는 읽는 용도, 줄바꿈 살려 표시. 아주 길면 화면만 자르고(렌더 부담) 복사는 항상 전문
       const full = String(s.content || "");
@@ -266,10 +329,10 @@ function cardHtml(s) {
     }
     body = `<div class="snip-body">${body}</div>`;
   }
-  const copyBtn = s.kind === "tb4"
+  const copyBtn = (s.kind === "tb4" || s.kind === "file")
     ? ""
     : `<button class="btn ${s.kind === "note" ? "btn-outline" : "btn-primary"} btn-sm snip-copy" data-id="${s.id}" data-part="content">📋 복사</button>`;
-  const badgeCls = s.kind === "tb4" ? "is-tb4" : s.kind === "note" ? "is-note" : "";
+  const badgeCls = s.kind === "tb4" ? "is-tb4" : s.kind === "note" ? "is-note" : s.kind === "file" ? "is-file" : "";
   return `<div class="snip-card ${expanded ? "is-open" : ""}" data-id="${s.id}">
     <div class="snip-card-head snip-toggle" data-id="${s.id}" title="${expanded ? "접기" : "펼쳐서 내용 보기"}">
       <div class="snip-card-title">
@@ -282,7 +345,7 @@ function cardHtml(s) {
         ${when ? `<span class="snip-when">${escapeHtml(when)}</span>` : ""}
         ${copyBtn}
         ${s.kind !== "tb4" ? `<button class="icon-btn snip-dl" data-id="${s.id}" title="파일로 저장">⬇</button>` : ""}
-        <button class="icon-btn snip-edit" data-id="${s.id}" title="편집">✎</button>
+        ${s.kind !== "file" ? `<button class="icon-btn snip-edit" data-id="${s.id}" title="편집">✎</button>` : ""}
         <button class="icon-btn snip-del" data-id="${s.id}" title="삭제">🗑</button>
       </div>
     </div>
@@ -334,7 +397,9 @@ function renderSnippets() {
     btn.addEventListener("click", (e) => {
       e.stopPropagation();
       const s = STATE.snippets.find((x) => x.id === Number(btn.dataset.id));
-      if (!s || !s.content) { showToast("내용이 없어요", true); return; }
+      if (!s) return;
+      if (s.kind === "file") { downloadFile(s); return; }  // 원본 바이너리는 인증 스트리밍으로
+      if (!s.content) { showToast("내용이 없어요", true); return; }
       let name = (s.title || "snippet-" + s.id).replace(/[\\/:*?"<>|]/g, "_").trim();
       if (!/\.[A-Za-z0-9]{1,8}$/.test(name)) name += ".txt";
       const a = document.createElement("a");
@@ -499,6 +564,11 @@ document.addEventListener("DOMContentLoaded", () => {
   $("logoutBtn").addEventListener("click", logout);
   $("addBtn").addEventListener("click", () => openModal(null));
   $("addMemoBtn").addEventListener("click", () => openModal(null, "note"));
+  $("addFileBtn").addEventListener("click", () => $("directFileInput").click());
+  $("directFileInput").addEventListener("change", function () {
+    const f = this.files[0]; this.value = "";
+    if (f) uploadFile(f);
+  });
   $("searchInput").addEventListener("input", (e) => setSearch(e.target.value));
   $("searchInput").addEventListener("keydown", (e) => {
     if (e.key === "Escape") { clearSearch(); e.target.blur(); }

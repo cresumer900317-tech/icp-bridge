@@ -133,6 +133,7 @@ body {
 }
 .kind-badge.is-tb4 { background: #ecfdf5; color: #047857; }
 .kind-badge.is-note { background: #fef3c7; color: #b45309; }
+.kind-badge.is-file { background: #e0e7ff; color: #4338ca; }
 .snip-title-text { font-size: 0.88rem; font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .snip-author { flex: none; font-size: 0.7rem; color: var(--muted); background: #f3f4f6; padding: 2px 7px; border-radius: 20px; }
 .snip-card-actions { display: flex; align-items: center; gap: 6px; flex: none; }
